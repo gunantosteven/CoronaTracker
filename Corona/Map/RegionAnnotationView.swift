@@ -26,23 +26,30 @@ class RegionAnnotationView: MKAnnotationView {
 	}()
 
 	private var radius: CGFloat {
-		guard let annotation = annotation as? RegionAnnotation else { return 1 }
-		let number = CGFloat(annotation.region.report?.stat.confirmedCount ?? 0)
-		return 10 + log( 1 + number) * CGFloat(mapZoomLevel - 2.2)
+		let value = CGFloat(number ?? 0)
+		return 10 + log( 1 + value) * CGFloat(mapZoomLevel - 2.2)
 	}
 
 	private var color: UIColor {
-		guard let annotation = annotation as? RegionAnnotation else { return .clear }
-		let number = CGFloat(annotation.region.report?.stat.confirmedCount ?? 0)
-		let level = log10(number + 10) * 2
+		switch mode {
+		case .active: return SystemColor.systemOrange.withAlphaComponent(0.8)
+		case .recovered: return SystemColor.systemGreen.withAlphaComponent(0.8)
+		case .deaths: return SystemColor.systemRed.withAlphaComponent(0.8)
+		default: break
+		}
+
+		let value = CGFloat(number ?? 0)
+		let level = log10(value + 10) * 2
 		let brightness = max(0, 255 - level * 40) / 255;
 		let saturation = brightness > 0 ? 1 : max(0, 255 - ((level * 40) - 255)) / 255;
 		return UIColor(red: saturation, green: brightness, blue: brightness * 0.4, alpha: 0.8)
 	}
 
-	var region: Region? {
-		(annotation as? RegionAnnotation)?.region
-	}
+	var region: Region? { (annotation as? RegionAnnotation)?.region }
+
+	var mode: Statistic.Kind { (annotation as? RegionAnnotation)?.mode ?? .confirmed }
+
+	private var number: Int? { region?.report?.stat.number(for: mode) }
 
 	private var detailsString: NSAttributedString? {
 		let descriptor = UIFontDescriptor
@@ -51,17 +58,17 @@ class RegionAnnotationView: MKAnnotationView {
 		let boldFont = UIFont(descriptor: descriptor!, size: 0)
 
 		let string = NSMutableAttributedString()
-		string.append(.init(string: "Confirmed: "))
 		string.append(.init(string: region?.report?.stat.confirmedCountString ?? "",
-			attributes: [.foregroundColor: UIColor.systemOrange, .font: boldFont]))
+							attributes: [.foregroundColor: UIColor.systemOrange, .font: boldFont]))
 
-		string.append(.init(string: "\nRecovered: "))
-		string.append(.init(string: region?.report?.stat.recoveredCountString ?? "",
-			attributes: [.foregroundColor : UIColor.systemGreen, .font: boldFont]))
+		string.append(.init(string: "\n" + (region?.report?.stat.activeCountString ?? ""),
+							attributes: [.foregroundColor : UIColor.systemYellow, .font: boldFont]))
 
-		string.append(.init(string: "\nDeath: "))
-		string.append(.init(string: region?.report?.stat.deathCountString ?? "",
-			attributes: [.foregroundColor : UIColor.systemRed, .font: boldFont]))
+		string.append(.init(string: "\n" + (region?.report?.stat.recoveredCountString ?? ""),
+							attributes: [.foregroundColor : UIColor.systemGreen, .font: boldFont]))
+
+		string.append(.init(string: "\n" + (region?.report?.stat.deathCountString ?? ""),
+							attributes: [.foregroundColor : UIColor.systemRed, .font: boldFont]))
 
 		return string
 	}
@@ -78,10 +85,14 @@ class RegionAnnotationView: MKAnnotationView {
 
 	override var annotation: MKAnnotation? {
 		didSet {
+			guard annotation != nil else {
+				return
+			}
+
 			configure()
-            
-            // BUG FIX: the data within detailAccessoryView would become stale in some cases. To address this, we now ensure that the report text is set each time the annotation is updated
-            detailAccessoryView?.attributedText = detailsString
+			
+			/// Ensure that the report text is set each time the annotation is updated
+			detailAccessoryView?.detailsLabel?.attributedText = detailsString
 		}
 	}
 
@@ -95,23 +106,14 @@ class RegionAnnotationView: MKAnnotationView {
 	}()
 	override var rightCalloutAccessoryView: UIView? { get { rightAccessoryView } set {} }
 
-	private lazy var detailAccessoryView: UILabel? = {
-		let label = UILabel()
-		label.textColor = .systemGray
-		label.font = UIFont(descriptor: .preferredFontDescriptor(withTextStyle: .footnote), size: 0)
-		label.attributedText = detailsString
-		label.numberOfLines = 10
-		return label
-	}()
+	private lazy var detailAccessoryView: DetailsView? = { DetailsView() }()
+
 	override var detailCalloutAccessoryView: UIView? { get { detailAccessoryView } set {} }
 
 	override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
 		super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
 
 		canShowCallout = true
-
-		layer.borderColor = UIColor.white.cgColor
-		layer.borderWidth = 2
 	}
 
 	required init?(coder aDecoder: NSCoder) {
@@ -119,9 +121,8 @@ class RegionAnnotationView: MKAnnotationView {
 	}
 
 	func configure() {
-		guard let region = region else { return }
-		if self.mapZoomLevel > 4 {
-			self.countLabel.text = region.report?.stat.confirmedCountString
+		if round(self.mapZoomLevel) > 4 {
+			self.countLabel.text = number?.groupingFormatted
 			self.countLabel.font = .boldSystemFont(ofSize: 13 * max(1, log(self.mapZoomLevel - 2)))
 			self.countLabel.alpha = 1
 		}
@@ -173,5 +174,51 @@ extension RegionAnnotationView { // Pressable view
 		super.touchesCancelled(touches, with: event)
 
 		setTouched(false)
+	}
+}
+
+private class DetailsView: UIView {
+	private lazy var titleLabel: UILabel! = {
+		let label = UILabel()
+		label.textColor = .systemGray
+		label.font = UIFont(descriptor: .preferredFontDescriptor(withTextStyle: .footnote), size: 0)
+		label.text = "\(L10n.Case.confirmed):\n\(L10n.Case.active):\n\(L10n.Case.recovered):\n\(L10n.Case.deaths):"
+		label.numberOfLines = 0
+		label.translatesAutoresizingMaskIntoConstraints = false
+		return label
+	}()
+
+	lazy var detailsLabel: UILabel! = {
+		let label = UILabel()
+		label.font = UIFont(descriptor: .preferredFontDescriptor(withTextStyle: .footnote), size: 0)
+		label.numberOfLines = 0
+		label.translatesAutoresizingMaskIntoConstraints = false
+		return label
+	}()
+
+	override var forFirstBaselineLayout: UIView { titleLabel }
+	override var forLastBaselineLayout: UIView { titleLabel }
+
+	init() {
+		super.init(frame: .zero)
+
+		initializeView()
+	}
+
+	required init?(coder: NSCoder) {
+		fatalError("init(coder:) has not been implemented")
+	}
+
+	private func initializeView() {
+		addSubview(titleLabel)
+		titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+		titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor).isActive = true
+		titleLabel.heightAnchor.constraint(equalTo: heightAnchor).isActive = true
+
+		addSubview(detailsLabel)
+		detailsLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+		detailsLabel.centerYAnchor.constraint(equalTo: centerYAnchor).isActive = true
+
+		titleLabel.trailingAnchor.constraint(equalTo: detailsLabel.leadingAnchor, constant: -5).isActive = true
 	}
 }

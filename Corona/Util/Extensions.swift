@@ -10,12 +10,32 @@ import Foundation
 
 extension Locale {
 	public static let posix = Locale(identifier: "en_US_POSIX")
+
+	static func isoCode(from englishCountryName: String) -> String? {
+		if let pair = YAMLFiles.isoCountryNames
+			.compactMapValues({ $0 as? [String] })
+			.first(where: { $0.value.contains(englishCountryName) }) {
+			return pair.key
+		}
+
+		return Locale.isoRegionCodes.first { code in
+			code == englishCountryName || posix.localizedString(forRegionCode: code) == englishCountryName
+		}
+	}
+
+	static func translateCountryName(_ englishCountryName: String) -> String? {
+		guard let code = isoCode(from: englishCountryName) else { return englishCountryName }
+		return Locale.current.localizedString(forRegionCode: code)
+	}
+
+	var isEnglish: Bool { languageCode == "en" }
 }
 
 extension Calendar {
 	public static let posix: Calendar = {
 		var calendar = Calendar(identifier: .gregorian)
 		calendar.locale = .posix
+		calendar.timeZone = .utc
 		return calendar
 	}()
 }
@@ -92,7 +112,7 @@ extension TimeZone {
 
 extension Double {
 	public var kmFormatted: String {
-		if self >= 10_000, self < 1_000_000 {
+		if self >= 1_000, self < 1_000_000 {
 			return String(format: "%.1fk", locale: .posix, self / 1_000).replacingOccurrences(of: ".0", with: "")
 		}
 
@@ -114,6 +134,8 @@ extension Int {
 	public var groupingFormatted: String {
 		NumberFormatter.groupingFormatter.string(from: NSNumber(value: self))!
 	}
+
+	public static func random() -> Int { random(in: 1..<max) }
 }
 
 extension NumberFormatter {
@@ -131,5 +153,14 @@ extension NumberFormatter {
 		formatter.maximumFractionDigits = 1
 		formatter.multiplier = 1
 		return formatter
+	}()
+}
+
+extension FileManager {
+	static let cachesDirectoryURL: URL? = {
+		return try? FileManager.default.url(for: .cachesDirectory,
+											in: .userDomainMask,
+											appropriateFor: nil,
+											create: true)
 	}()
 }
